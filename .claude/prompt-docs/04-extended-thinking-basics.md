@@ -1,0 +1,157 @@
+# Building with Extended Thinking
+
+Extended thinking gives Claude enhanced reasoning capabilities for complex tasks, while providing varying levels of transparency into its step-by-step thought process before it delivers its final answer.
+
+## Supported models
+
+Extended thinking is supported in the following models:
+
+- Claude Sonnet 4.5 (`claude-sonnet-4-5-20250929`)
+- Claude Sonnet 4 (`claude-sonnet-4-20250514`)
+- Claude Sonnet 3.7 (`claude-3-7-sonnet-20250219`) ([deprecated](/docs/en/about-claude/model-deprecations))
+- Claude Haiku 4.5 (`claude-haiku-4-5-20251001`)
+- Claude Opus 4.1 (`claude-opus-4-1-20250805`)
+- Claude Opus 4 (`claude-opus-4-20250514`)
+
+<Note>
+API behavior differs across Claude Sonnet 3.7 and Claude 4 models, but the API shapes remain exactly the same.
+
+For more information, see the Differences in Thinking Across Model Versions section.
+</Note>
+
+## How extended thinking works
+
+When extended thinking is turned on, Claude creates `thinking` content blocks where it outputs its internal reasoning. Claude incorporates insights from this reasoning before crafting a final response.
+
+The API response will include `thinking` content blocks, followed by `text` content blocks.
+
+Here's an example of the default response format:
+
+```json
+{
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "Let me analyze this step by step...",
+      "signature": "WaUjzkypQ2mUEVM36O2TxuC06KN8xyfbJwyem2dw3URve/op91XWHOEBLLqIOMfFG/UvLEczmEsUjavL...."
+    },
+    {
+      "type": "text",
+      "text": "Based on my analysis..."
+    }
+  ]
+}
+```
+
+For more information about the response format of extended thinking, see the [Messages API Reference](/docs/en/api/messages).
+
+## How to use extended thinking
+
+Here is an example of using extended thinking in the Messages API:
+
+### Shell Example
+
+```bash
+curl https://api.anthropic.com/v1/messages \
+     --header "x-api-key: $ANTHROPIC_API_KEY" \
+     --header "anthropic-version: 2023-06-01" \
+     --header "content-type: application/json" \
+     --data \
+'{
+    "model": "claude-sonnet-4-5",
+    "max_tokens": 16000,
+    "thinking": {
+        "type": "enabled",
+        "budget_tokens": 10000
+    },
+    "messages": [
+        {
+            "role": "user",
+            "content": "Are there an infinite number of prime numbers such that n mod 4 == 3?"
+        }
+    ]
+}'
+```
+
+### Python Example
+
+```python
+import anthropic
+
+client = anthropic.Anthropic()
+
+response = client.messages.create(
+    model="claude-sonnet-4-5",
+    max_tokens=16000,
+    thinking={
+        "type": "enabled",
+        "budget_tokens": 10000
+    },
+    messages=[{
+        "role": "user",
+        "content": "Are there an infinite number of prime numbers such that n mod 4 == 3?"
+    }]
+)
+
+# The response will contain summarized thinking blocks and text blocks
+for block in response.content:
+    if block.type == "thinking":
+        print(f"\nThinking summary: {block.thinking}")
+    elif block.type == "text":
+        print(f"\nResponse: {block.text}")
+```
+
+### TypeScript Example
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk';
+
+const client = new Anthropic();
+
+const response = await client.messages.create({
+  model: "claude-sonnet-4-5",
+  max_tokens: 16000,
+  thinking: {
+    type: "enabled",
+    budget_tokens: 10000
+  },
+  messages: [{
+    role: "user",
+    content: "Are there an infinite number of prime numbers such that n mod 4 == 3?"
+  }]
+});
+
+// The response will contain summarized thinking blocks and text blocks
+for (const block of response.content) {
+  if (block.type === "thinking") {
+    console.log(`\nThinking summary: ${block.thinking}`);
+  } else if (block.type === "text") {
+    console.log(`\nResponse: ${block.text}`);
+  }
+}
+```
+
+To turn on extended thinking, add a `thinking` object, with the `type` parameter set to `enabled` and the `budget_tokens` to a specified token budget for extended thinking.
+
+The `budget_tokens` parameter determines the maximum number of tokens Claude is allowed to use for its internal reasoning process. In Claude 4 models, this limit applies to full thinking tokens, and not to the summarized output. Larger budgets can improve response quality by enabling more thorough analysis for complex problems, although Claude may not use the entire budget allocated, especially at ranges above 32k.
+
+`budget_tokens` must be set to a value less than `max_tokens`. However, when using interleaved thinking with tools, you can exceed this limit as the token limit becomes your entire context window (200k tokens).
+
+## Summarized thinking
+
+With extended thinking enabled, the Messages API for Claude 4 models returns a summary of Claude's full thinking process. Summarized thinking provides the full intelligence benefits of extended thinking, while preventing misuse.
+
+Here are some important considerations for summarized thinking:
+
+- You're charged for the full thinking tokens generated by the original request, not the summary tokens.
+- The billed output token count will **not match** the count of tokens you see in the response.
+- The first few lines of thinking output are more verbose, providing detailed reasoning that's particularly helpful for prompt engineering purposes.
+- As Anthropic seeks to improve the extended thinking feature, summarization behavior is subject to change.
+- Summarization preserves the key ideas of Claude's thinking process with minimal added latency, enabling a streamable user experience and easy migration from Claude Sonnet 3.7 to Claude 4 models.
+- Summarization is processed by a different model than the one you target in your requests. The thinking model does not see the summarized output.
+
+<Note>
+Claude Sonnet 3.7 continues to return full thinking output.
+
+In rare cases where you need access to full thinking output for Claude 4 models, [contact our sales team](mailto:sales@anthropic.com).
+</Note>

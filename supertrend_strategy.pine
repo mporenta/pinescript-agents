@@ -1,0 +1,805 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © jengothecat 1759498499
+
+//@version=6
+strategy(
+     "MP - Claude Supertrend Strategy with Risk Management & Alerts",
+     shorttitle="MPSuper",
+     overlay=true,
+     precision=2,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=100,
+     initial_capital=25000,
+     process_orders_on_close=false,
+     margin_long=25,
+     margin_short=25)
+
+//@strategy_alert_message {{strategy.order.alert_message}}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════
+unixTime = input.int(1761140099, "Unix Time in seconds", group="Entry Settings")
+useTrailingStopLoss = input.bool(false, "Use Trailing Stop Loss", group="Entry Settings")
+src = input.source(close, "Source")
+atrPeriod = input(10, "Supertrend ATR Length")
+factor = input.float(3.0, "Supertrend Factor", step=0.01)
+bias = input.string("both", "Direction Bias", options=["both", "Short", "Long"], group="Risk Settings")
+profitThreshold = input.float(300, "Profit Threshold", group="Risk Settings")
+rewardRiskRatio = input.float(1.5, "Reward/Risk Ratio", minval=0.1, group="Risk Settings")
+riskPercentage = input.float(1.0, "Risk Percentage", step=0.1, group="Risk Settings")
+commissionValue = input.float(0.0, "Commission per Share", group="Risk Settings")
+accountBalance = input.float(0, "Account Balance", group="Risk Settings")
+stopType = input.string("tick", "Stop Type", options=["tick", "kcStop", "vStop", "pivot"])
+setMarketOrder = input.bool(false, "Use Market Order")
+takeProfitBool = input.bool(true, "Use Take Profit")
+profitSigBool = input.bool(true, "Use Profit Threshold")
+tsFactor = input.float(1.5, "Trailing Stop Factor", group="Trailing Stop Settings")
+tsPeriod = input.int(3, "Trailing Stop Length", group="Trailing Stop Settings")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+volumeMultiplier = 6  // Minimum volume multiplier for trade eligibility
+entryDelayMs = 6000  // Delay in milliseconds before entry signal confirmation
+minCommission = 1.0
+maxPercentage = 0.01
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STATE VARIABLES
+// ═══════════════════════════════════════════════════════════════════════════
+var string action = ""
+symbol = syminfo.ticker
+barTF = timeframe.period
+
+newDay = dayofmonth != dayofmonth[1]
+var float dailyNetProfit = 0.0
+var float lastNetProfit = 0.0
+var float[] tradeProfits = array.new_float(0)
+
+// Position and Account Management
+var int timeCloseNow = na
+var float accountBalanceDyn = na
+var float positionSize = na
+var bool longE = false
+var bool shortE = false
+var bool closeAllSig = false
+var bool enter = false
+var float profitClose = na
+var bool profitSig = false
+
+// Risk Management and Commissions
+var float dynRiskReward = na
+var float brokerComish = na
+var float perShareRisk = na
+var float QtytL = na
+var float QtytS = na
+var bool updatePriceAlert = false
+var float longTarget = na
+var float shortTarget = na
+var float longStop = na
+var float shortStop = na
+var float supertrendSlCheck = na
+var bool upTrend = false
+var bool dnTrend = false
+var bool volumeVar = false
+var bool volCond = false
+var float adjVolume = na
+var bool volumeFirst = false
+var int openBarUnix = na
+var bool alertSent = false
+var string notes = "tick-boom"
+var bool closeAll = false
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TIMEFRAME ADJUSTMENT
+// ═══════════════════════════════════════════════════════════════════════════
+simple int tfInt = 1
+tf = timeframe.main_period
+
+if tf == "10S"
+    tfInt := 6
+else if tf == "5S"
+    tfInt := 12
+else if tf == "15S"
+    tfInt := 4
+else
+    tfInt := 1
+
+unixTimeCond = time > (unixTime * 1000)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DAILY RESET LOGIC
+// ═══════════════════════════════════════════════════════════════════════════
+if newDay
+    notes := ""
+    timeCloseNow := na
+    // Position and Account Management
+    brokerComish := na
+    accountBalanceDyn := na
+    positionSize := na
+    longE := false
+    shortE := false
+    closeAllSig := false
+    enter := false
+    profitSig := false
+    profitClose := na
+
+    // Risk Management and Commissions
+    dynRiskReward := na
+    perShareRisk := na
+    QtytL := na
+    QtytS := na
+    updatePriceAlert := false
+    longTarget := na
+    shortTarget := na
+    longStop := na
+    shortStop := na
+    supertrendSlCheck := na
+
+    closeAllSig := false
+    closeAll := false
+    enter := false
+    upTrend := false
+    dnTrend := false
+    openBarUnix := na
+
+    volumeFirst := false
+    volCond := false
+    array.push(tradeProfits, dailyNetProfit)
+    dailyNetProfit := 0.0
+    alertSent := false
+
+enter := strategy.position_size != 0
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PROFIT TRACKING
+// ═══════════════════════════════════════════════════════════════════════════
+currentNetProfit = strategy.netprofit + strategy.openprofit
+profitChange = currentNetProfit - lastNetProfit
+dailyNetProfit += profitChange
+lastNetProfit := currentNetProfit
+
+accountBalanceDyn := accountBalance > 0 ? accountBalance : strategy.initial_capital
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VOLUME ANALYSIS
+// ═══════════════════════════════════════════════════════════════════════════
+if newDay
+    volumeVar := false
+
+if session.islastbar_regular
+    volumeFirst := true
+
+// Exclude market close bar from volume calculations
+excludeMarketCloseBar = session.ispostmarket and session.ispostmarket[1] and
+     not session.ispostmarket[2]
+
+if excludeMarketCloseBar or (not session.isfirstbar_regular and not session.islastbar_regular)
+    adjVolume := volume
+
+var float highestVolume = na
+
+if session.ismarket and not timeframe.isdaily
+    volumeFirst := session.isfirstbar_regular
+
+if volumeFirst and not timeframe.isdaily
+    highestVolume := volume
+    adjVolume := volume / 2
+else
+    if volume > nz(highestVolume) and not timeframe.isdaily
+        highestVolume := volume
+
+if highestVolume > 0 and volumeFirst
+    adjVolume := volume / 2
+
+// Calculate volume condition
+adjMean = ta.sma(adjVolume, 10 * tfInt)
+volCond := volume >= adjMean and ((accountBalanceDyn / close) * volumeMultiplier < volume)
+
+plotshape(volume >= adjMean, "volume >= adjMean", color=color.fuchsia)
+plotshape(
+     ((accountBalanceDyn / close) * volumeMultiplier < volume),
+     " ((accountBalanceDyn / close) > volume * volumeMultiplier)",
+     color=color.yellow)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUPPORT AND RESISTANCE LEVELS
+// ═══════════════════════════════════════════════════════════════════════════
+highUsePivot = fixnan(ta.pivothigh(3, 3))
+lowUsePivot = fixnan(ta.pivotlow(3, 3))
+
+r1 = na(highUsePivot) ? na : highUsePivot
+s1 = na(lowUsePivot) ? na : lowUsePivot
+levelSqueeze = (close < r1 and close > s1)
+
+bgcolor(close < r1 and close > s1 ? #ff525221 : na)
+bgcolor(close > r1 or close < s1 ? color.rgb(151, 255, 82, 87) : na)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUPERTREND INDICATORS
+// ═══════════════════════════════════════════════════════════════════════════
+atrPeriod1 = input.int(10, "Supertrend ATR Length 1", group="SuperTrend Settings")
+factor1 = input.float(1.0, "Supertrend Factor 1", minval=0.01, step=0.01, group="SuperTrend Settings")
+
+atrPeriod2 = input.int(11, "Supertrend ATR Length 2", group="SuperTrend Settings")
+factor2 = input.float(2.0, "Supertrend Factor 2", minval=0.01, step=0.01, group="SuperTrend Settings")
+
+atrPeriod3 = input.int(12, "Supertrend ATR Length 3", group="SuperTrend Settings")
+factor3 = input.float(3.0, "Supertrend Factor 3", minval=0.01, step=0.01, group="SuperTrend Settings")
+
+// Calculate triple Supertrend confirmation
+[supertrend1, direction1] = ta.supertrend(factor1, atrPeriod1)
+[supertrend2, direction2] = ta.supertrend(factor2, atrPeriod2)
+[supertrend3, direction3] = ta.supertrend(factor3, atrPeriod3)
+
+// Require all three Supertrends to agree for strong trend signal
+upTrend := direction1 == -1 and direction2 == -1 and direction3 == -1
+dnTrend := direction1 == 1 and direction2 == 1 and direction3 == 1
+
+if upTrend
+    dnTrend := false
+if dnTrend
+    upTrend := false
+
+// Main Supertrend for entry signals
+[supertrend, direction] = ta.supertrend(factor, atrPeriod * tfInt)
+plot(
+     direction < 0 ? supertrend : na,
+     "Up direction",
+     color=color.green,
+     style=plot.style_linebr)
+plot(
+     direction > 0 ? supertrend : na,
+     "Down direction",
+     color=color.red,
+     style=plot.style_linebr)
+
+// Trailing stop Supertrend
+[supertrendSl, directionSl] = ta.supertrend(tsFactor, tsPeriod * tfInt)
+uptrendFnBool = (directionSl == -1 or upTrend) ? true :
+     (directionSl == 1 or dnTrend) ? false : false
+
+plotshape(directionSl, "directionSL")
+plot(
+     directionSl < 0 ? supertrendSl : na,
+     " supertrendSL Up direction",
+     color=color.green,
+     style=plot.style_linebr)
+plot(
+     directionSl > 0 ? supertrendSl : na,
+     " supertrendSL Down direction",
+     color=color.red,
+     style=plot.style_linebr)
+
+stopLossTriggerPrice = directionSl == -1 ? supertrendSl :
+     directionSl == 1 ? supertrendSl : na
+
+plotshape(
+     uptrendFnBool or not uptrendFnBool,
+     "uptrend_fn_bool",
+     color=uptrendFnBool ? color.green : color.red)
+
+plot(ta.vwap, "vwap", color=color.purple)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTRY SIGNAL LOGIC
+// ═══════════════════════════════════════════════════════════════════════════
+openBarUnix := session.isfirstbar_regular ? time : na
+
+// Short entry signal with confirmation delay
+// After 6 seconds: require direction change confirmation
+// Before 6 seconds: immediate signal if conditions met
+shortSignal = time >= openBarUnix + entryDelayMs ?
+     directionSl[1] == 1 and direction == 1 and direction[1] != 1 and
+     directionSl == 1 and not na(supertrendSl) :
+     direction == 1 and directionSl == 1 and not na(supertrendSl)
+
+// Long entry signal with confirmation delay
+longSignal = time >= openBarUnix + entryDelayMs ?
+     directionSl[1] == -1 and direction != 1 and direction[1] == 1 and
+     directionSl != 1 and not na(supertrendSl) :
+     direction != 1 and directionSl != 1 and not na(supertrendSl)
+
+longE := strategy.position_size > 0
+shortE := strategy.position_size < 0
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STOP LOSS MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════
+var float vstopSlFix = na
+vstopSlFix := fixnan(stopLossTriggerPrice)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JSON MESSAGE BUILDER - UPDATE PRICE
+// ═══════════════════════════════════════════════════════════════════════════
+updateIbPrice(alertNotes) =>
+    tpShort = close - rewardRiskRatio * (supertrendSl - close)
+    tpLong = close + rewardRiskRatio * (close - supertrendSl)
+    tpPrice = close > vstopSlFix ? tpLong : tpShort
+
+    json1 = '{"symbol":"' + symbol + '","orderAction":"updateIbPrice"' +
+     ',"rewardRiskRatio":' + str.tostring(rewardRiskRatio) +
+     ',"barSizeSetting_tv":"' + str.tostring(timeframe.period) + '"' +
+     ',"quantity":' + str.tostring(-1) +
+     ',"riskPercentage":' + str.tostring(riskPercentage) +
+     ',"kcAtrFactor":' + str.tostring(1.5) +
+     ',"atrFactor":' + str.tostring(1.5) +
+     ',"vstopAtrFactor":' + str.tostring(1.5) +
+     ',"accountBalance":' + str.tostring(accountBalanceDyn) +
+     ',"limit_price":' + str.tostring(close) +
+     ',"stopType":"' + stopType + '"' +
+     ',"takeProfitBool":' + str.tostring(takeProfitBool) +
+     ',"stop_loss":' + str.tostring(vstopSlFix) +
+     ',"take_profit_price":' + str.tostring(tpPrice) +
+     ',"unixtime":' + str.tostring(time) +
+     ',"notes":"' + str.tostring(alertNotes) + '"' +
+     ',"set_market_order":' + str.tostring(setMarketOrder) + '}'
+    json1
+
+if unixTimeCond and not updatePriceAlert and close != close[1]
+    updatePriceAlert := true
+    alert(updateIbPrice(""), alert.freq_once_per_bar)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JSON MESSAGE BUILDER - ORDER EXECUTION
+// ═══════════════════════════════════════════════════════════════════════════
+buildJson(limtPrice, action, qty, stop, target, notes) =>
+    timeFn = time
+    timeFnStr = str.tostring(timeFn)
+    quantity = qty
+    if na(quantity)
+        quantity := -1
+
+    json = '{"symbol":"' + symbol + '", "orderAction":"' + action + '"' +
+     ', "rewardRiskRatio":' + str.tostring(rewardRiskRatio) +
+     ', "barSizeSetting_tv":"' + barTF + '"' +
+     ', "quantity":' + str.tostring(quantity) +
+     ', "riskPercentage":' + str.tostring(riskPercentage) +
+     ', "accountBalance":' + str.tostring(accountBalanceDyn) +
+     ', "limit_price":' + str.tostring(limtPrice) +
+     ', "stop_loss":' + str.tostring(stop) +
+     ', "take_profit_price":' + str.tostring(target) +
+     ', "set_market_order":' + str.tostring(setMarketOrder) +
+     ', "takeProfitBool":' + str.tostring(takeProfitBool) +
+     ', "stopType":"' + stopType + '"' +
+     ', "unixtime": ' + str.tostring(time) +
+     ', "notes":"' + notes + timeFnStr + '"}'
+    json
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MOVING AVERAGE FILTERS
+// ═══════════════════════════════════════════════════════════════════════════
+var bool longMA = false
+var bool shortMA = false
+var float ema9OneMin = na
+var float rma9OneMin = na
+
+ema9OneMin := ta.ema(close, tfInt * 9)
+rma9OneMin := ta.rma(close, tfInt * 9)
+
+plot(ema9OneMin, "ema9_one_min")
+plot(rma9OneMin, "rma9_one_min", color=color.red)
+
+ema9 = ta.ema(close, 9)
+supertrendSlCheck := supertrendSl
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTRY CONDITION LOGGING (DEBUG)
+// ═══════════════════════════════════════════════════════════════════════════
+// Log key conditions for BUY signal - reduced from 15+ log calls to summary
+if bar_index % 100 == 0  // Log only every 100 bars to reduce overhead
+    log.info("Entry Conditions: levelSqueeze={0}, volCond={1}, profitSig={2}, upTrend={3}",
+         not levelSqueeze, volCond, not profitSig, upTrend)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MOVING AVERAGE TREND DETERMINATION
+// ═══════════════════════════════════════════════════════════════════════════
+if close > open and not na(ema9OneMin)
+    longMA := (ema9OneMin > rma9OneMin and close > ema9OneMin)
+
+if close < open and not na(ema9OneMin)
+    shortMA := (ema9OneMin < rma9OneMin and close < ema9OneMin)
+
+plotshape(shortMA, "shortMA start", color=color.new(#40fb78, 0))
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTRY ORDER LOGIC
+// ═══════════════════════════════════════════════════════════════════════════
+if not levelSqueeze
+    if volCond and not profitSig and not session.isfirstbar_regular
+        alertSent := false
+
+        if unixTimeCond and not enter[1] and session.ismarket and not na(supertrendSlCheck)
+
+            // ═══════════════════════════════════════════════════════════════
+            // LONG ENTRY
+            // ═══════════════════════════════════════════════════════════════
+            // Conditions:
+            // - Not in short MA trend
+            // - Long signal from Supertrend
+            // - No existing positions
+            // - Price above EMA and RMA
+            // - Bias allows longs
+            // - Strong uptrend confirmed
+            // - Bullish candle
+            if not shortMA and longSignal and not longE and not shortE and
+                 close > ema9OneMin and close > rma9OneMin and
+                 bias != "Short" and upTrend and close > open
+
+                longStop := supertrendSl - 0.02
+                perShareRisk := math.abs(close - longStop)
+                timeCloseNow := time_close
+
+                longTarget := close + rewardRiskRatio * (close - longStop)
+                notes := "supertrend Long" + str.tostring(timeCloseNow)
+                action := "BUY"
+                longE := true
+
+                // Position sizing with commission adjustment
+                toleratedRisk = math.abs(
+                     (riskPercentage / 100 * accountBalanceDyn) - minCommission)
+                pQtyL = math.round(
+                     math.min(toleratedRisk / perShareRisk, math.floor(accountBalanceDyn / close)))
+                grossCommission = pQtyL * 0.005
+                tradeValue = pQtyL * close
+                brokerComish := math.min(
+                     math.max(grossCommission, minCommission), tradeValue * maxPercentage)
+                QtytL := math.round(
+                     math.min(
+                          (toleratedRisk - brokerComish) / perShareRisk,
+                          math.floor(accountBalanceDyn / close)))
+
+                log.warning("LONG ENTRY: qty={0}, stop={1}, target={2}", QtytL, longStop, longTarget)
+
+                strategy.entry("Long Entry", strategy.long, qty=QtytL, disable_alert=true)
+
+                if not alertSent
+                    alert(
+                         buildJson(close, "BUY", QtytL, longStop, longTarget, notes),
+                         alert.freq_once_per_bar_close)
+                    alertSent := true
+
+                strategy.exit(
+                     "Long SL/TP", "Long Entry", stop=longStop, qty=QtytL, disable_alert=true)
+
+            // ═══════════════════════════════════════════════════════════════
+            // SHORT ENTRY
+            // ═══════════════════════════════════════════════════════════════
+            // Conditions:
+            // - Not in long MA trend
+            // - Short signal from Supertrend
+            // - No existing positions
+            // - Price below EMA and RMA
+            // - Bias allows shorts
+            // - Strong downtrend confirmed
+            // - Bearish candle
+            if not longMA and shortSignal and not longE and not shortE and
+                 close < ema9OneMin and close < rma9OneMin and
+                 bias != "Long" and dnTrend and close < open
+
+                shortStop := supertrendSl + 0.02
+                shortTarget := close - rewardRiskRatio * (shortStop - close)
+                timeCloseNow := time_close
+                notes := "supertrend short" + str.tostring(timeCloseNow)
+                action := "SELL"
+                shortE := true
+
+                // Position sizing with commission adjustment
+                perShareRisk := math.abs(close - shortStop)
+                toleratedRisk = math.abs(
+                     (riskPercentage / 100 * accountBalanceDyn) - minCommission)
+                pQtyS = math.round(
+                     math.min(toleratedRisk / perShareRisk, math.floor(accountBalanceDyn / close)))
+                grossCommission = pQtyS * 0.005
+                tradeValue = pQtyS * close
+                brokerComish := math.min(
+                     math.max(grossCommission, minCommission), tradeValue * maxPercentage)
+                QtytS := math.round(
+                     math.min(
+                          (toleratedRisk - brokerComish) / perShareRisk,
+                          math.floor(accountBalanceDyn / close)))
+
+                log.warning("SHORT ENTRY: qty={0}, stop={1}, target={2}", QtytS, shortStop, shortTarget)
+
+                strategy.entry("Short Entry", strategy.short, qty=QtytS, disable_alert=true)
+
+                if not alertSent
+                    alert(
+                         buildJson(close, "SELL", QtytS, shortStop, shortTarget, notes),
+                         alert.freq_once_per_bar_close)
+                    alertSent := true
+
+                strategy.exit(
+                     "Short SL/TP", "Short Entry", stop=shortStop, qty=QtytS, disable_alert=true)
+
+// Background color indicators
+bgcolor(longMA ? #21f33d1a : na, title="longMA", display=display.none)
+bgcolor(shortMA ? color.rgb(243, 58, 33, 90) : na, title="shortMA", display=display.none)
+bgcolor(updatePriceAlert ? #f3e5211a : na, title="update_price_alert", display=display.none)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POSITION STATE MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════
+if strategy.position_size != 0
+    enter := true
+    closeAllSig := true
+
+bgcolor(alertSent ? #daff5228 : na, title="alert_sent")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JSON MESSAGE BUILDER - CLOSE ALL
+// ═══════════════════════════════════════════════════════════════════════════
+alertMessageCloseAll(notes) =>
+    json3 = '{"symbol": "' + symbol + '"' +
+           ', "orderAction": "close_all"' +
+           ', "rewardRiskRatio": ' + str.tostring(1) +
+           ', "barSizeSetting_tv": "' + str.tostring(timeframe.period) + '"' +
+           ', "quantity": ' + str.tostring(-1) +
+           ', "riskPercentage": ' + str.tostring(riskPercentage) +
+           ', "kcAtrFactor": ' + str.tostring(1.5) +
+           ', "atrFactor": ' + str.tostring(1.5) +
+           ', "vstopAtrFactor": ' + str.tostring(1.5) +
+           ', "accountBalance": ' + str.tostring(accountBalanceDyn) +
+           ', "limit_price": ' + str.tostring(close) +
+           ', "stopType": "' + stopType + '"' +
+           ', "takeProfitBool": ' + str.tostring(takeProfitBool) +
+           ', "stop_loss": ' + str.tostring(close) +
+           ', "unixtime": ' + str.tostring(time) +
+           ', "uptrend": ' + str.tostring(uptrendFnBool) +
+           ', "test": ' + str.tostring(false) +
+           ', "notes": "' + str.tostring(notes) + '"' +
+           ', "set_market_order": ' + str.tostring(setMarketOrder) +
+           '}'
+    json3
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TRAILING STOP CROSS DETECTION
+// ═══════════════════════════════════════════════════════════════════════════
+vstopSlFixCross(direction, action) =>
+    var float stop = na
+    if not na(vstopSlFix)
+        stop := vstopSlFix
+
+    var bool fireStop = false
+    if strategy.position_size == 0
+        fireStop := false
+    if na(direction)
+        fireStop := false
+
+    var int longPos = na
+    var int shortPos = na
+
+    if not na(direction)
+        if direction == 1 and action == "BUY"
+            longPos := 1
+            shortPos := 0
+        if direction == -1 and action == "SELL"
+            shortPos := 1
+            longPos := 0
+
+        if longPos == 1
+            fireStop := close <= stop[1]
+        if shortPos == 1
+            fireStop := close >= stop[1]
+
+    fireStop
+
+// Reset close signal when no position
+if strategy.position_size == 0
+    closeAllSig := false
+
+// Clear stop/target levels when market closed
+if not session.ismarket
+    longTarget := na
+    shortStop := na
+    longStop := na
+    shortTarget := na
+
+longE := strategy.position_size > 0
+shortE := strategy.position_size < 0
+
+if enter
+    closeAllSig := true
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VISUALIZATION - STOP LOSS LEVELS
+// ═══════════════════════════════════════════════════════════════════════════
+stopLossColor = directionSl == -1 and not na(stopLossTriggerPrice) ? color.green :
+     directionSl == 1 and not na(stopLossTriggerPrice) ? color.red : na
+
+plot(vstopSlFix, "stopLossTriggerPrice", color=stopLossColor)
+plot(supertrendSlCheck, "supertrendSL_check", color=stopLossColor)
+
+profitClose := strategy.openprofit + strategy.netprofit
+plotshape(profitClose, "profit_close", color=color.maroon)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXIT CONDITION DETECTION
+// ═══════════════════════════════════════════════════════════════════════════
+profitThresholdBreak = profitClose >= profitThreshold or
+     profitClose <= (accountBalanceDyn * (riskPercentage / 100)) * -1
+
+crossdownTp = ta.crossunder(low, shortTarget)
+plotshape(crossdownTp, "crossdownTP", color=color.white)
+
+crossupTp = ta.crossover(high, longTarget)
+crossdownStop = ta.crossunder(low, vstopSlFix)
+crossUpStop = ta.crossover(high, vstopSlFix)
+
+var int closeDirection = na
+var bool vstopSlFixCross = false
+
+if not enter
+    closeDirection := na
+    closeAll := false
+
+if not enter and not longSignal and not shortSignal
+    longTarget := na
+    shortStop := na
+    longStop := na
+    shortTarget := na
+
+if enter
+    closeDirection := uptrendFnBool ? 1 : -1
+
+if longE
+    vstopSlFixCross := directionSl == -1 and directionSl[1] != -1
+
+if shortE
+    vstopSlFixCross := directionSl == 1 and directionSl[1] != 1
+
+plotshape(
+     closeDirection,
+     "close_direction",
+     color=closeDirection == 1 ? color.green : color.red,
+     location=location.belowbar)
+
+rsi = ta.rsi(close, 14)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// END OF DAY CLOSE FUNCTION
+// ═══════════════════════════════════════════════════════════════════════════
+closeEndofDay(hasPos) =>
+    var bool pos = false
+    pos := hasPos
+    var bool closePos = false
+    if pos
+        closePos := time_close >= time_tradingday + 71880000
+    closePos
+
+plotshape(
+     not closeAll and vstopSlFixCross and closeAllSig,
+     "vstopSlFixCross and closeAllSig")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXIT LOGIC - TRAILING STOP
+// ═══════════════════════════════════════════════════════════════════════════
+if enter and not na(supertrendSlCheck)
+    if useTrailingStopLoss
+        if longE
+            if crossdownStop and closeAllSig and not closeAll
+                notes := "crossdownStop close_all"
+                closeAll := true
+                strategy.close_all(
+                     "crossdownStop close_all", alertMessageCloseAll(notes), true, false)
+                shortE := false
+                longE := false
+                closeAllSig := false
+
+        if shortE
+            if crossUpStop and closeAllSig and not closeAll
+                notes := "crossUpStopclose_all"
+                closeAll := true
+                strategy.close_all(
+                     "crossUpStop close_all", alertMessageCloseAll(notes), true, false)
+                shortE := false
+                longE := false
+                closeAllSig := false
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // EXIT LOGIC - PROFIT THRESHOLD
+    // ═══════════════════════════════════════════════════════════════════════
+    if profitSigBool and profitThresholdBreak and closeAllSig and not closeAll
+        notes := "profitSig"
+        closeAll := true
+        strategy.close_all("profitSig close_all", alertMessageCloseAll(notes), true, false)
+        shortE := false
+        longE := false
+        closeAllSig := false
+        profitSig := true
+
+if profitSigBool and not profitSig and profitThresholdBreak
+    profitSig := true
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXIT LOGIC - TAKE PROFIT AND RSI
+// ═══════════════════════════════════════════════════════════════════════════
+var float rsiLevel = na
+
+if closeAllSig and not closeAll
+    if longE
+        rsiLevel := 80
+
+    if shortE
+        rsiLevel := 20
+
+    // Long position exits
+    if longE
+        // RSI overbought exit
+        if close >= longTarget and rsi >= rsiLevel
+            notes := "exitRSI close_all"
+            closeAll := true
+            shortE := false
+            longE := false
+            strategy.close_all("exitRSI close_all", alertMessageCloseAll(notes), true, false)
+            closeAllSig := false
+
+        // Take profit target hit
+        if crossupTp
+            closeAll := true
+            shortE := false
+            longE := false
+            notes := "crossupTP close_all"
+            strategy.close_all("crossupTP close_all", alertMessageCloseAll(notes), true, false)
+            closeAllSig := false
+
+    // Short position exits
+    if shortE
+        // Take profit target hit
+        if crossdownTp
+            closeAll := true
+            shortE := false
+            longE := false
+            notes := "crossdownTP close_all"
+            strategy.close_all("crossdownTP close_all", alertMessageCloseAll(notes), true, false)
+            closeAllSig := false
+
+        // RSI oversold exit
+        if close <= shortTarget and rsi <= rsiLevel
+            closeAll := true
+            shortE := false
+            longE := false
+            notes := "exitRSI close_all"
+            strategy.close_all("exitRSI close_all", alertMessageCloseAll(notes), true, false)
+            closeAllSig := false
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXIT LOGIC - END OF DAY
+// ═══════════════════════════════════════════════════════════════════════════
+closeEndOfDay = closeEndofDay(enter)
+
+if enter and not closeAll
+    if closeEndOfDay
+        closeAll := true
+        shortE := false
+        longE := false
+        strategy.close_all("close_all end of day", alertMessageCloseAll(notes), true, false)
+
+plotshape(closeEndOfDay, "close_End_of_Day", display=display.none)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ALERT RESET
+// ═══════════════════════════════════════════════════════════════════════════
+shareQty = strategy.position_size
+if shareQty == 0 and shareQty[1] != 0
+    alertSent := false
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VISUALIZATION - PLOTS AND BACKGROUNDS
+// ═══════════════════════════════════════════════════════════════════════════
+bgcolor(enter ? color.new(color.blue, 90) : na, title="enter", display=display.none)
+
+plot(shortStop, "shortStop", color=color.green, style=plot.style_linebr)
+plot(longStop, "longStop", color=color.red, style=plot.style_linebr)
+plot(shortTarget, "shortTarget", color=color.red, style=plot.style_linebr)
+plot(longTarget, "longTarget", color=color.green, style=plot.style_linebr)
+
+plotshape(lastNetProfit, "lastNetProfit", color=color.new(#862305, 0))
+plotshape(dailyNetProfit, "dailyNetProfit", color=color.new(#00e6db, 0))
+plotshape(shortMA, "shortMA end", color=color.fuchsia)
+
+// Summary logging (reduced frequency)
+if bar_index % 100 == 0
+    log.warning("Status: levelSqueeze={0}, volCond={1}, upTrend={2}, enter={3}",
+         not levelSqueeze, volCond, upTrend, enter)

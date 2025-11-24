@@ -1,340 +1,254 @@
-# Pine Script Development Assistant - Claude Code Instructions
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Overview
-You are now equipped with specialized Pine Script development capabilities. This project provides you with comprehensive Pine Script v6 knowledge, specialized subagents, and a template library to help users create professional TradingView indicators and strategies.
 
-## 🚀 CRITICAL: Initialization & Onboarding
+This is a specialized Pine Script development environment for creating TradingView indicators and strategies. The system uses a multi-agent architecture with 7 specialized agents coordinated through Claude Code's Task tool and automated through hooks. The hook system provides deterministic routing - single-word commands and keywords automatically trigger appropriate agent workflows.
 
-### YOU MUST PROACTIVELY START THE CONVERSATION!
+## Architecture
 
-When Claude Code starts in this project, **immediately greet the user** without waiting for them to say anything:
+### Multi-Agent System
 
-#### For First-Time Users (check if `.claude/.onboarding_complete` doesn't exist):
+The codebase uses specialized subagents (`.claude/agents/`) that work together:
+
+1. **pine-manager** - Orchestrates complex projects, coordinates other agents, manages scoping process
+2. **pine-visualizer** - Breaks down trading ideas into implementable components
+3. **pine-developer** - Writes production-quality Pine Script v6 code
+4. **pine-debugger** - Troubleshoots issues and adds debugging tools
+5. **pine-backtester** - Implements performance metrics and testing
+6. **pine-optimizer** - Enhances performance and user experience
+7. **pine-publisher** - Prepares scripts for TradingView publication
+
+### Agent Selection Logic
+
+- Simple indicators/strategies → pine-developer (direct implementation)
+- Complex multi-step projects → pine-manager (orchestrates all agents)
+- Debugging requests → pine-debugger
+- Performance optimization → pine-optimizer
+- YouTube video analysis → pine-visualizer (automatically runs `python tools/video-analyzer.py "<url>"`)
+
+### Hook System
+
+Active hooks (`.claude/hooks/`) provide deterministic, automated behavior:
+
+- **startup.sh** - Checks onboarding state (`.claude/.onboarding_complete`) and greets user
+- **user-prompt-submit.sh** - Automatic routing engine that detects keywords and triggers agents
+  - Single-word commands: `start`, `help`, `status`, `examples`, `templates`, `lock`, `unlock`
+  - Keyword detection: "debug" → pine-debugger, "optimize" → pine-optimizer, YouTube URLs → pine-visualizer
+  - Complexity scoring: Multiple requirements (2+ "and"/"with"/"also") → pine-manager
+- **before-write.sh** - Enforces file protection when locked, validates Pine Script files
+- **after-edit.sh** - Checks for repainting issues and suggests improvements
+- **before-delete.sh** - Prevents deletion of protected files when locked
+- **after-rename.sh** - Validates file naming conventions
+
+File protection system:
+- **Locked** (`lock` command): Only `/projects/` and state files writable
+- **Unlocked** (`unlock` command): All files modifiable (default for development)
+- Protection state stored in `.claude/.lock_state`
+
+## Project Structure
+
 ```
-🚀 Welcome to Pine Script Development Assistant!
-
-I'm ready to help you create professional TradingView indicators and strategies.
-
-You can:
-1. 📝 Tell me what you want to build ("Create an RSI indicator")
-2. 🎥 Share a YouTube video to analyze
-3. 💡 Describe your trading idea
-
-What would you like to create first?
-```
-
-#### For Returning Users (if `.claude/.onboarding_complete` exists):
-```
-✅ Pine Script Assistant ready!
-
-Welcome back! What would you like to build today?
-```
-
-### IMPORTANT: 
-- **DO NOT WAIT** for the user to speak first
-- **CHECK FILES** to determine if returning user
-- **BE PROACTIVE** in offering help
-- **START IMMEDIATELY** when the session begins
-
-## Special Commands
-
-When the user types these single words, respond with specific actions:
-
-### "start" or "Start" or "START"
-Run the interactive start process:
-```bash
-./start
-```
-And guide them through the options interactively.
-
-### "help" or "Help" or "HELP"
-Show available commands and capabilities:
-```
-Available commands:
-• start - Interactive setup guide
-• help - This help message
-• analyze [URL] - Analyze a YouTube video
-• create [description] - Create a Pine Script
-• examples - Show available examples
-• templates - Show quick templates
-```
-
-### "examples" or "Examples"
-List the available example scripts from the examples/ directory.
-
-### "templates" or "Templates"
-Show quick template options they can choose from.
-
-### "lock" or "Lock" or "LOCK"
-Enable file protection mode:
-- Only `/projects/` directory can be modified
-- System files become read-only
-- Prevents accidental corruption of agents/documentation
-
-### "unlock" or "Unlock" or "UNLOCK"
-Disable file protection (development mode):
-- All files can be modified
-- Use with caution
-- Default state for development
-
-### "status" or "Status" or "STATUS"
-Show current system status including lock state and project count.
-
-## YouTube Video Analysis
-
-### DETERMINISTIC BEHAVIOR
-When a user provides a YouTube URL, you MUST:
-
-1. **Immediately recognize** the YouTube URL in the prompt
-2. **Use the pine-visualizer agent** with Task tool to analyze the video
-3. **The agent will automatically**:
-   - Run `python tools/video-analyzer.py "<url>"`
-   - Extract transcript and trading concepts
-   - Generate Pine Script specification
-   - Show results to user
-
-### Example:
-```
-User: https://youtube.com/watch?v=abc123
-You: I'll analyze this YouTube video to extract the trading strategy...
-[Use Task tool with pine-visualizer agent]
+pinescript-agents/
+├── .claude/
+│   ├── agents/          # 7 specialized agent prompts (markdown files)
+│   └── hooks/           # Bash hooks for deterministic behavior
+├── projects/            # USER WORKSPACE - All Pine Scripts go here
+│   ├── blank.pine       # Template for new projects (auto-renamed by pine-manager)
+│   └── *.pine           # User-created indicators and strategies
+├── docs/
+│   ├── pinescript-v6/   # Complete Pine Script v6 reference documentation
+│   ├── tradingview/     # TradingView platform documentation
+│   ├── project-scoping-flow.md  # Standard project scoping process
+│   ├── comprehensive-scoping-flow.md  # For unknown patterns
+│   └── edge-case-handler.md  # Workarounds for non-standard requests
+├── templates/           # Ready-to-use Pine Script templates
+│   ├── indicators/      # RSI, MACD, Bollinger Bands, etc.
+│   ├── strategies/      # Trend following, mean reversion patterns
+│   └── utilities/       # Helper functions (debugging, risk management)
+├── examples/            # Example scripts by complexity (simple/intermediate/advanced)
+└── tools/               # Python utilities
+    └── video-analyzer.py      # Extracts trading strategies from YouTube videos
 ```
 
-**DO NOT**:
-- Ask if they want to analyze it
-- Wait for confirmation
-- Skip the analysis step
+**Key Files:**
+- `start` - Interactive bash script for onboarding and menu system
+- `analyze-video.sh` - Wrapper script for video analysis
+- `run_analysis.py` - Python runner for analysis tasks
+- `package.json` - Project metadata
 
-**ALWAYS**:
-- Run the analysis immediately
-- Show extracted concepts
-- Proceed to implementation
+## Key Workflows
 
-## File Protection System
+### New Project Creation
 
-The project includes a protection system to prevent accidental modification of system files:
+1. pine-manager renames `projects/blank.pine` → `projects/[project-name].pine` (e.g., `rsi-divergence-indicator.pine`)
+2. Creates fresh `blank.pine` for next project
+3. Delegates to appropriate agents based on complexity
+4. All development happens in `/projects/` directory
 
-### Protection States
-- **Locked** 🔒: Only `/projects/` directory can be modified
-- **Unlocked** 🔓: All files can be modified (development mode)
+### YouTube Video Analysis
 
-### Commands
-- `lock` - Enable file protection
-- `unlock` - Disable file protection (default for development)
-- `status` - Check current protection state
+When user provides YouTube URL (detected by `user-prompt-submit.sh`):
+1. pine-visualizer agent automatically invoked
+2. Runs `python tools/video-analyzer.py "<url>"` to extract transcript
+3. Identifies trading concepts, indicators, and strategy components
+4. Generates Pine Script specification with feasibility assessment
+5. Passes to pine-manager for implementation coordination
 
-### Protected Areas (when locked)
-- `.claude/agents/` - Agent configurations
-- `.claude/hooks/` - System hooks
-- `docs/` - Documentation files
-- `templates/` - Template library
-- `tools/` - System tools
-- `examples/` - Example scripts
-- Root config files (README.md, CLAUDE.md, package.json)
+The `tools/video-analyzer.py` script handles video transcription and initial analysis.
 
-### Always Writable
-- `/projects/` - User Pine Scripts
-- `.claude/.lock_state` - Lock state file
-- `.claude/.onboarding_complete` - Onboarding marker
-- Other state files
+### Project Scoping (pine-manager)
 
-### Development Note
-The system defaults to **unlocked** during development to allow easy modifications. Use `lock` command when working on Pine Scripts to prevent accidental system file changes.
+Before implementing, pine-manager follows scoping process:
+1. Check if request matches known patterns (standard indicators/strategies)
+2. If unknown → `/docs/comprehensive-scoping-flow.md` for deep discovery
+3. If edge case (ML, options, exotic data) → `/docs/edge-case-handler.md` for workarounds
+4. Ask 5-20 questions based on complexity
+5. Generate clear spec with feasibility assessment
 
-## Initialization
-When a user opens this project, you should:
-1. Recognize you're in the Pine Script development environment
-2. Load the Pine Script v6 documentation from `docs/pinescript-v6/`
-3. Be aware of the available subagents in `.claude/agents/`
-4. Have access to templates in `templates/`
-5. Be ready to help with Pine Script development
-6. **Hooks are active** - They will help route requests to appropriate agents automatically
-7. **Onboarding has run** - User has seen instructions
+## Commands and Natural Language
 
-## Hooks System (Active)
+### Single-Word Commands (auto-handled by hooks)
+These commands are intercepted by `user-prompt-submit.sh` hook:
+- `start` - Runs interactive `./start` bash script (shows menu and project count)
+- `help` - Lists all available commands
+- `examples` - Lists scripts from `examples/` directory
+- `templates` - Shows quick template options
+- `lock` - Enable file protection (only `/projects/` writable)
+- `unlock` - Disable protection (default development mode)
+- `status` - Shows lock state, protection mode, and project count
 
-This project uses Claude Code hooks for deterministic agent selection:
+### Slash Commands
+Available in `.claude/commands/`:
+- `/pinescript-mcp` - Invoke pinescript MCP server for documentation lookup and code validation
+- `/create-prompt` - Expert prompt engineer for creating optimized agent prompts
 
-### user-prompt-submit.sh
-- Analyzes user requests before processing
-- Suggests appropriate agents based on keywords
-- Detects project complexity
-- Ensures consistent agent routing
+### Skills
+Available in `.claude/skills/`:
+- All 7 pine agents (pine-manager, pine-developer, pine-debugger, etc.) are available as skills
+- `create-claude-agent-prompt` - Creates detailed prompts for Claude agents
+- `pinescript-mcp` - PineScript MCP integration
 
-### before-write.sh
-- Validates Pine Script files before saving
-- Ensures files are in `/projects/` directory
-- Checks for version declaration
-- Reminds to rename blank.pine to project-specific name
+### Natural Language Interface
+Users can describe requests naturally - hooks automatically route to appropriate agents:
+- "Create an RSI divergence indicator with alerts" → pine-manager
+- "Debug my script - it's repainting" → pine-debugger
+- "Optimize this for faster loading" → pine-optimizer
+- "Analyze this video: https://youtube.com/watch?v=..." → pine-visualizer
 
-### after-edit.sh
-- Validates Pine Script after modifications
-- Checks for repainting issues
-- Suggests improvements (na handling, risk management, input groups)
-- Provides real-time feedback
+## Pine Script Critical Constraints
 
-## Available Subagents
+### TradingView Limits
+- 500 bars historical lookback max
+- 500 plot/hline/fill outputs max
+- 64 drawing objects (label/line/box/table)
+- 40 `security()` calls max
+- Tables limited to 100 cells
 
-You have 7 specialized subagents at your disposal:
+### Line Wrapping Rules (Common Error Source)
+Pine Script requires continuation lines to be indented MORE than the first line:
 
-1. **pine-visualizer**: Breaks down trading ideas into components
-2. **pine-developer**: Writes production Pine Script v6 code  
-3. **pine-debugger**: Adds debugging tools and troubleshooting
-4. **pine-backtester**: Implements comprehensive testing metrics
-5. **pine-optimizer**: Optimizes performance and user experience
-6. **pine-manager**: Orchestrates multi-agent workflows
-7. **pine-publisher**: Prepares scripts for TradingView publication
+```pinescript
+// CORRECT
+longCondition = ta.crossover(ema50, ema200) and
+     rsi < 30 and
+     volume > ta.sma(volume, 20)
 
-## Workflow Guidelines
-
-### For Simple Requests
-When users ask for simple indicators or strategies, you can handle these directly or delegate to appropriate agents:
-- "Create an RSI indicator" → Use pine-developer
-- "Debug my script" → Use pine-debugger
-- "Optimize performance" → Use pine-optimizer
-
-### For Complex Projects
-When users describe complex requirements, use the pine-manager agent to orchestrate:
-- "Build a complete trading system with..." → pine-manager coordinates all agents
-- "Create a multi-timeframe strategy with backtesting" → pine-manager orchestrates workflow
-
-### Automatic Agent Selection
-Based on the user's request, automatically select the most appropriate agent:
-- Conceptual/planning questions → pine-visualizer
-- Code implementation → pine-developer
-- Error fixing → pine-debugger
-- Performance testing → pine-backtester
-- UX improvement → pine-optimizer
-- Publishing preparation → pine-publisher
-- Complex multi-step projects → pine-manager
-
-## Key Commands and Patterns
-
-### Creating New Scripts
-```
-User: "Create a [indicator/strategy] that [description]"
-Action: 
-1. Use pine-visualizer to break down requirements
-2. Use pine-developer to implement
-3. Use pine-debugger to add testing tools
-4. Use pine-optimizer to enhance UX
+// WRONG - will cause "end of line without line continuation" error
+longCondition = ta.crossover(ema50, ema200) and
+rsi < 30 and
+volume > ta.sma(volume, 20)
 ```
 
-### Debugging Existing Scripts
-```
-User: "My script has [problem description]"
-Action:
-1. Use pine-debugger to identify issues
-2. Use pine-developer to fix problems
-3. Use pine-debugger to verify fixes
-```
+Ternary operators MUST stay on one line - cannot be wrapped.
 
-### Optimizing Performance
-```
-User: "Make my script faster/better"
-Action:
-1. Use pine-optimizer to analyze current performance
-2. Use pine-backtester to measure baseline
-3. Use pine-optimizer to implement improvements
-4. Use pine-backtester to validate improvements
+### Scope Restrictions
+`plot()` cannot be used inside local scopes (if/for/functions). Use conditional plotting instead:
+```pinescript
+// WRONG - causes error
+if condition
+    plot(value)
+
+// CORRECT
+plot(condition ? value : na)
 ```
 
-## Pine Script Knowledge Base
+### Repainting Prevention
+- Use `barstate.isconfirmed` for signals
+- Set `lookahead=barmerge.lookahead_off` in `request.security()`
+- Document any intentional repainting
 
-You have comprehensive documentation available:
-- **Language Reference**: `docs/pinescript-v6/language-reference.md`
-- **Built-in Functions**: `docs/pinescript-v6/built-in-functions.md`
-- **TradingView Environment**: `docs/tradingview/`
-- **Templates**: `templates/` directory with ready-to-use code
+## Documentation References
 
-## Important Pine Script Considerations
+Primary docs in `/docs/pinescript-v6/`:
+- `language-reference.md` - Core syntax and concepts
+- `built-in-functions.md` - Complete function reference
+- `core-concepts/execution-model.md` - How Pine Script executes
+- `core-concepts/repainting.md` - Avoiding repainting issues
+- `quick-reference/limitations.md` - Platform constraints
+- `quick-reference/common-patterns.md` - Reusable code patterns
 
-### Always Remember:
-1. **Version Declaration**: Every script starts with `//@version=6`
-2. **Repainting**: Avoid or document clearly when present
-3. **Limits**: 500 bars lookback, 500 plots max, 40 security() calls max
-4. **Performance**: Optimize security() calls and array operations
-5. **User Experience**: Group inputs, add tooltips, use professional colors
-
-### Common Pitfalls to Avoid:
-1. Not handling `na` values
-2. Using `security()` without proper lookahead settings
-3. Mixing series and simple types incorrectly
-4. Not considering real-time vs historical calculation differences
-5. Creating strategies that repaint
-
-## Templates Available
-
-You have pre-built templates in:
-- `templates/indicators/` - Common indicators (RSI, MACD, Bollinger Bands, etc.)
-- `templates/strategies/` - Strategy patterns (trend following, mean reversion, etc.)
-- `templates/utilities/` - Helper functions (debugging, risk management, backtesting)
-
-## Response Format
-
-When helping users:
-1. **Understand** the requirement fully
-2. **Plan** the approach (which agents/templates to use)
-3. **Implement** using appropriate agents
-4. **Test** with debugging and backtesting tools
-5. **Optimize** for performance and UX
-6. **Deliver** complete, production-ready code
+Load these as needed based on the task.
 
 ## Quality Standards
 
-All scripts you help create should have:
-- ✅ Proper Pine Script v6 syntax
-- ✅ No repainting (or clearly documented)
-- ✅ Error handling for edge cases
-- ✅ Intuitive user inputs with tooltips
-- ✅ Professional visual presentation
-- ✅ Debugging capabilities included
-- ✅ Performance metrics (for strategies)
-- ✅ Clear documentation and comments
+All delivered Pine Scripts must have:
+- `//@version=6` declaration at top
+- Proper error handling for `na` values
+- Grouped inputs with tooltips
+- No repainting (or clearly documented)
+- Efficient calculations (optimized `security()` calls)
+- Professional visual presentation
+- Clear comments for complex logic
 
-## Example Interactions
+## Development Workflow
 
-### Simple Indicator
-```
-User: "Create an RSI divergence indicator"
-Your approach:
-1. Use pine-developer to create RSI divergence detection
-2. Use pine-debugger to add divergence visualization
-3. Use pine-optimizer to enhance visuals and alerts
-```
+### For System Development
+- System defaults to **unlocked** mode (all files modifiable)
+- Hooks in `.claude/hooks/` are always protected (never writable)
+- Agents in `.claude/agents/` are always protected
+- Protected paths defined in `.claude/protected-paths.json`
 
-### Complex Strategy
-```
-User: "Build a mean reversion strategy using Bollinger Bands and volume"
-Your approach:
-1. Use pine-manager to orchestrate:
-   - pine-visualizer breaks down components
-   - pine-developer implements strategy
-   - pine-backtester adds metrics
-   - pine-debugger adds trade debugging
-   - pine-optimizer enhances UX
-```
+### For User Script Creation
+- Use `lock` command to prevent accidental system file modifications
+- All Pine Scripts MUST go in `/projects/` directory
+- pine-manager automatically renames `projects/blank.pine` → `projects/[project-name].pine`
+- A fresh `blank.pine` is created after each project initialization
+- Existing projects visible via `status` command
 
-## Testing Your Scripts
+### State Management
+- `.claude/.onboarding_complete` - Tracks first-time user status
+- `.claude/.lock_state` - Stores protection mode (locked/unlocked)
+- `.claude/.state.json` - Session state (if needed)
+- `.claude/.last_session` - Last session tracking
 
-Before delivering any script:
-1. Verify syntax is correct
-2. Check for common errors (na handling, repainting)
-3. Ensure all features work as intended
-4. Confirm visual elements display properly
-5. Test alerts function correctly (if applicable)
+### Key Principles
+- **Hooks provide deterministic routing** - trust the automation, don't override
+- **Projects directory is sacred** - all user Pine Scripts go in `/projects/`
+- **blank.pine workflow** - pine-manager renames it for each new project and creates a fresh one
+- **Interactive start** - `./start` bash script handles onboarding and provides menu
+- **Automatic video analysis** - YouTube URLs trigger `tools/video-analyzer.py` via pine-visualizer
 
-## User Support
+## Working with This Codebase
 
-When users need help:
-- Be proactive in suggesting improvements
-- Offer to add debugging tools
-- Suggest optimization opportunities
-- Recommend best practices
-- Provide clear explanations
+### When User Asks to Create Something
+1. Check if it's a simple request (single indicator/strategy) → use pine-developer directly
+2. If complex (multiple requirements, "and"/"with" keywords) → use pine-manager to orchestrate
+3. If YouTube URL provided → pine-visualizer extracts requirements first
+4. Always start by understanding if similar templates exist in `templates/` or `examples/`
 
-## Remember
+### When User Reports Issues
+- "Repainting" / "not updating" → pine-debugger
+- "Slow" / "loading forever" → pine-optimizer
+- "Errors" / "not working" → pine-debugger
+- "Prepare for publishing" → pine-publisher
 
-You are a Pine Script expert assistant. Your goal is to help users create professional, efficient, and reliable TradingView indicators and strategies. Use your subagents wisely, leverage templates when appropriate, and always deliver high-quality Pine Script code.
+### File Operations
+- Reading templates: `templates/indicators/`, `templates/strategies/`, `templates/utilities/`
+- Reading examples: `examples/simple/`, `examples/intermediate/`, `examples/advanced/`
+- Reading docs: Start with `docs/pinescript-v6/language-reference.md` and `docs/pinescript-v6/built-in-functions.md`
+- Writing scripts: Always to `projects/[descriptive-name].pine`
 
-When in doubt about which agent to use, the pine-manager agent can help orchestrate the entire workflow.
+### Hook Interception
+User messages are processed by `user-prompt-submit.sh` BEFORE reaching Claude. Single-word commands (`start`, `help`, etc.) exit immediately with output. For all other prompts, the hook provides routing suggestions but doesn't block - Claude still receives the full prompt.
